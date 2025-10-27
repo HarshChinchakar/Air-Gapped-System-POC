@@ -1,5 +1,4 @@
 
-imghdr-py
 
 # Core Libraries
 numpy
