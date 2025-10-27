@@ -1,7 +1,6 @@
 # Core Libraries
 numpy
 pandas
-imghdr
 scikit-learn
 
 # Sentence Embedding and NLP
