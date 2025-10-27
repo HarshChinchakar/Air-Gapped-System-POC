@@ -6,7 +6,7 @@ scikit-learn
 # Sentence Embedding and NLP
 sentence-transformers
 transformers
-torch>=2.2.0,<2.5
+torch
 faiss-cpu
 rank-bm25
 tiktoken
