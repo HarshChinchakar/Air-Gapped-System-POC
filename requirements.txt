@@ -32,7 +32,8 @@ streamlit==1.48.0
 # Optional - For safe async process handling
 psutil==6.1.0
 
-openpyxl xlrd==2.0.1 
+openpyxl 
+xlrd==2.0.1 
 tqdm 
 tiktoken 
 pandas
