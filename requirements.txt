@@ -1,39 +1,34 @@
-# Core Python Libraries
-numpy==1.26.4
-pandas==2.3.1
-scikit-learn==1.5.2
+# Core Libraries
+numpy
+pandas
+scikit-learn
 
 # Sentence Embedding and NLP
-sentence-transformers==2.2.2
-transformers==4.44.2
-torch==2.3.0
-faiss-cpu==1.8.0
+sentence-transformers
+transformers
+torch>=2.2.0,<2.5
+faiss-cpu
+rank-bm25
+tiktoken
+rapidfuzz
 
-# OCR and PDF Processing
-pytesseract==0.3.10
-pdfplumber==0.11.0
-pypdf2==3.0.1
-pdf2image==1.17.0
+# OCR, PDF & Image Processing
+pytesseract
+pdfplumber
+pypdf2
+pdf2image
+pillow
+opencv-python
 
-# Image Handling
-pillow==11.0.0
-opencv-python==4.10.0.84
+# Spreadsheet & Data Handling
+openpyxl
+xlrd==2.0.1
 
-# Fast String Matching
-rapidfuzz==3.9.3
+# Utilities
+tqdm
+requests
+psutil
+python-dotenv
 
-# Data Handling and Utilities
-tqdm==4.66.5
-requests==2.32.3
-
-# Web Interface (for Streamlit-based POC)
-streamlit==1.48.0
-
-# Optional - For safe async process handling
-psutil==6.1.0
-
-openpyxl 
-xlrd==2.0.1 
-tqdm 
-tiktoken 
-pandas
+# Web Interface
+streamlit
