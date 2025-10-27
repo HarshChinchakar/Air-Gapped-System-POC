@@ -1,0 +1,8 @@
+2025-10-26 18:53:01,055 | INFO | Embedding run started
+2025-10-26 18:53:01,250 | INFO | Loaded text_chunks: 6306 entries; tables/summaries: 9963 entries
+2025-10-26 18:53:12,329 | INFO | Prepared total chunks for embedding (deduped): 6597
+2025-10-26 18:53:12,330 | INFO | Filtered tiny chunks; remaining: 6591
+2025-10-26 18:53:12,332 | INFO | Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2025-10-26 18:53:27,782 | INFO | Embedding model all-MiniLM-L6-v2 on cpu; dim=384; batch_size=128; chunks=6591
+2025-10-26 18:57:19,102 | INFO | Wrote FAISS index to Embedding/Data_Base/faiss.index
+2025-10-26 18:57:19,105 | INFO | Embedding run completed: {'timestamp': '2025-10-26T13:27:19.104499Z', 'input_text_chunks': '/home/harshchinchakar/Undirected/POC/Data Ingestion/Extracted Data/backups/text_chunks.json', 'input_tables_or_summaries': '/home/harshchinchakar/Undirected/POC/Data Ingestion/Extracted Data/backups/tables_summaries.jsonl', 'num_chunks': 6591, 'artifacts': {'embeddings': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/embeddings.npy', 'faiss_index': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/faiss.index', 'id_map': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/id_map.jsonl', 'meta': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/meta.jsonl', 'chunks_full': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/chunks_full.jsonl', 'index_meta': '/home/harshchinchakar/Undirected/POC/Embedding/Data_Base/index.meta.json', 'num_vectors': 6591}, 'time_taken_s': 258.05}
