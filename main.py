@@ -220,7 +220,7 @@ load_dotenv("./.env")
 # ---------------- CONFIG ----------------
 DEFAULT_RETRIEVAL_SCRIPT = "./Retrival/retrieval_combined_v2.py"
 TABLES_ONLY_SCRIPT = "./Retrival/retrival_tables.py"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
 MODEL = "gpt-4o-mini"
 SEMANTIC_TOP = 12
 KEYWORD_TOP = 12
