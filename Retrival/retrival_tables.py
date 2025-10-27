@@ -35,7 +35,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 log = logging.getLogger("retrieval_tables_embeddings")
 
 # ---------------- Config & helpers ----------------
-DEFAULT_INDEX_DIR = Path("./Embedding/Table Embeddings")
+SCRIPT_BASE = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_BASE.parent
+DEFAULT_INDEX_DIR = REPO_ROOT / "Embedding" / "Table Embeddings"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 SNIPPET_LEN = 400
@@ -185,7 +187,19 @@ def retrieval_tables_embeddings_pipeline(
     start_time = datetime.utcnow()
     log.info(f"Query: {query}")
 
-    # load index artifacts
+    # ---- Normalize index_dir (accept str or Path). Resolve relative paths relative to repo root ----
+    if not isinstance(index_dir, Path):
+        index_dir = Path(index_dir)
+    # If given path is relative, resolve it relative to the repo root (SCRIPT_BASE.parent)
+    if not index_dir.is_absolute():
+        index_dir = (REPO_ROOT / index_dir).resolve()
+    index_dir = index_dir.resolve()
+
+    # sanity check
+    if not index_dir.exists():
+        raise FileNotFoundError(f"Index directory not found: {index_dir}")
+
+    # load index artifacts (these functions expect a Path)
     meta = load_meta(index_dir)
     full = load_full(index_dir)
     id_map = load_id_map(index_dir)
@@ -400,6 +414,7 @@ def retrieval_tables_embeddings_pipeline(
     print("RETRIEVAL_JSON_OUTPUT:")
     print(json.dumps(output, ensure_ascii=False))
     return output
+
 
 # ---------------- CLI ----------------
 def main():
