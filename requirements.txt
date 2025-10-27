@@ -1,5 +1,5 @@
 
-python-3.10
+imghdr-py
 
 # Core Libraries
 numpy
