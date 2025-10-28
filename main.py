@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Streamlit RAG Interface (Tables / Text + Tables selector)
 Final Version — Creator: Harsh Chinchakar
@@ -11,23 +10,12 @@ import streamlit as st
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-# ---------------- PATH FIX (no logic changes) ----------------
-# Ensure relative paths work when Streamlit runs the app from a different cwd:
-BASE_DIR = Path(__file__).resolve().parent
-
-# Load from your .env file (repo root alongside this main.py)
-env_path = BASE_DIR / ".env"
-if env_path.exists():
-    load_dotenv(str(env_path))
-else:
-    # fallback: try default behavior (if .env is placed elsewhere)
-    load_dotenv()
+# Load from your .env file
+load_dotenv("./.env")
 
 # ---------------- CONFIG ----------------
-# Convert retrieval script relative paths to absolute paths (based on this file location)
-DEFAULT_RETRIEVAL_SCRIPT = str(BASE_DIR / "Retrival" / "retrieval_combined_v2.py")
-TABLES_ONLY_SCRIPT = str(BASE_DIR / "Retrival" / "retrival_tables.py")
-
+DEFAULT_RETRIEVAL_SCRIPT = "./Harsh/Testing Dump/Retrival/retrieval_combined_v2.py"
+TABLES_ONLY_SCRIPT = "./Harsh/Testing Dump/Retrival/retrival_tables.py"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-4o-mini"
 SEMANTIC_TOP = 12
@@ -41,25 +29,13 @@ def now_iso():
 
 def run_retrieval(query: str, retrieval_script: str):
     """Executes the retrieval script via subprocess and returns parsed JSON output."""
-    # use the BASE_DIR as cwd so relative references inside retrieval scripts resolve correctly
     cmd = f"python3 {shlex.quote(retrieval_script)} --query {shlex.quote(query)} --top_k {max(SEMANTIC_TOP, KEYWORD_TOP)}"
-    proc = subprocess.run(
-        cmd,
-        shell=True,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT_SECONDS,
-        cwd=str(BASE_DIR),
-    )
+    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     if proc.returncode != 0:
         raise RuntimeError(f"Retrieval script failed: {proc.stderr}")
 
     match = re.search(r"RETRIEVAL_JSON_OUTPUT:\s*(\{[\s\S]+\})", proc.stdout)
     if not match:
-        # fallback: try to find any JSON object in stdout
-        m2 = re.search(r"(\{[\s\S]+\})", proc.stdout)
-        if m2:
-            return json.loads(m2.group(1))
         raise RuntimeError("No valid JSON found in retrieval output.")
     return json.loads(match.group(1))
 
@@ -129,8 +105,16 @@ def run_rag_pipeline(query, scope="tables"):
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     system_prompt = (
-        "You are a formal company assistant answering from retrieved document chunks.\n"
-        "Use only provided data. If inferred, mark as 'Inferred'. Cite chunks as [chunk_id | pdf_name]."
+        "Rules (obey strictly):\n"
+        "1) Use ONLY the information present in the provided retrieved chunks to answer. Prefer direct evidence but if indirect evidence is present use to or process it towards maximum bound and infer required facts without Generating facts\n"
+        "2) If the exact fact is not directly stated, you MAY synthesize or infer an answer based on INDIRECT or PARTIAL evidence found across chunks. "
+        "When you do so, explicitly mark the statement as 'Inferred' and cite the supporting chunks for that inference.\n"
+        "3) Only respond with: \"Information not found in retrieved dataset.\" when there is absolutely no relevant information or inference possible from the provided chunks.\n"
+        "4) Cite each factual statement with the chunk citation format: [chunk_id | pdf_name]. If multiple chunks support it, cite all.\n"
+        "5) Produce a concise, formal natural-language answer; follow with a 'Sources' list (chunk citations). "
+        "Also include a short 'Limitations' note if any inferred conclusions were used.\n"
+        "When the required data isnt completely present then focus on the present data in the retrieved chunks and frame a short answer towards that"
+        "(7) When numbers are not present in the chunks -DO NOT ANSWER WITH NUMERIC ANSWERS - State that information is not present but this is what we found"
     )
     chunk_context = "\n".join([
         json.dumps({
