@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv("./.env")
 
 # ---------------- CONFIG ----------------
-DEFAULT_RETRIEVAL_SCRIPT = "./Harsh/Testing Dump/Retrival/retrieval_combined_v2.py"
+DEFAULT_RETRIEVAL_SCRIPT = "Retrival/retrieval_combined_v2.py"
 TABLES_ONLY_SCRIPT = "./Harsh/Testing Dump/Retrival/retrival_tables.py"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-4o-mini"
