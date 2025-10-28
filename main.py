@@ -191,9 +191,10 @@
 """
 main.py
 
-Retrieval runner — runs two retrieval scripts (combined = text+tables, and tables-only)
-with a hardcoded query, prints step-by-step progress, stdout/stderr, exit codes, parses JSON,
-and displays the retrieved (deduped) chunks on the page.
+Retrieval runner — robust version with defensive error handling.
+Runs two retrieval scripts (combined = text+tables, and tables-only)
+with a hardcoded query, prints step-by-step progress, stdout/stderr,
+attempts to parse JSON, and displays deduped retrieved chunks.
 
 Author: Harsh Chinchakar
 """
@@ -223,12 +224,13 @@ HARD_CODED_QUERY = (
 )
 
 SUBPROCESS_TIMEOUT = 180  # seconds
-TOP_K = 8  # used for dedupe_and_merge display limit (also passed to scripts as --top_k)
+TOP_K = 8  # top results for merging
+CHUNK_CHAR_LIMIT = 2500
 
 # ---------------- Streamlit UI ----------------
-st.set_page_config(page_title="Retrieval Runner — Hardcoded Query + Chunks", page_icon="🧪", layout="wide")
-st.title("Retrieval Runner — Hardcoded Query + Retrieved Chunks")
-st.markdown("Runs both retrieval scripts (combined and tables-only) and shows logs, outputs and the deduped retrieved chunks.")
+st.set_page_config(page_title="Retrieval Runner — Robust", page_icon="🧪", layout="wide")
+st.title("Retrieval Runner — Robust (with full error tracing)")
+st.markdown("Runs both retrieval scripts and shows detailed stdout/stderr, parsed JSON and merged chunks. Any error will be printed in the logs and the stderr panel.")
 
 # Left pane: controls & secrets
 col_controls, col_output = st.columns([1, 2])
@@ -244,15 +246,16 @@ with col_controls:
     st.code(HARD_CODED_QUERY)
 
     st.markdown("---")
-    # Fetch OpenAI key from multiple places
+    # Fetch OpenAI key from multiple places (safe)
     openai_env = os.getenv("OPENAI_API_KEY") or ""
     openai_secret_top = ""
     try:
-        # Try common placements in st.secrets
-        if "OPENAI_API_KEY" in st.secrets:
-            openai_secret_top = st.secrets["OPENAI_API_KEY"]
-        elif "openai" in st.secrets and isinstance(st.secrets["openai"], dict):
-            openai_secret_top = st.secrets["openai"].get("api_key", "")
+        # safe access to st.secrets
+        if hasattr(st, "secrets"):
+            if "OPENAI_API_KEY" in st.secrets:
+                openai_secret_top = st.secrets.get("OPENAI_API_KEY", "")
+            elif "openai" in st.secrets and isinstance(st.secrets["openai"], dict):
+                openai_secret_top = st.secrets["openai"].get("api_key", "")
     except Exception:
         openai_secret_top = ""
 
@@ -265,14 +268,12 @@ with col_controls:
             return k[0:1] + "*"*(len(k)-2) + k[-1:]
         return k[:4] + "*"*(max(6, len(k)-8)) + k[-4:]
 
-    st.subheader("OpenAI Key (Sources)")
-    st.write("Effective key chosen from: env `OPENAI_API_KEY`, `st.secrets['OPENAI_API_KEY']`, `st.secrets['openai']['api_key']`")
-    st.markdown(f"- `env OPENAI_API_KEY`: `{bool(openai_env)}`")
-    st.markdown(f"- `st.secrets OPENAI_API_KEY`: `{bool(openai_secret_top and 'OPENAI_API_KEY' in st.secrets)}`")
-    st.markdown(f"- `st.secrets.openai.api_key`: `{bool(openai_secret_top and 'openai' in st.secrets)}`")
-    st.markdown("**Effective OpenAI key (masked):**")
+    st.subheader("OpenAI Key (masked)")
+    st.markdown(f"- env OPENAI_API_KEY present: `{bool(openai_env)}`")
+    st.markdown(f"- st.secrets OPENAI_API_KEY present: `{bool(openai_secret_top and 'OPENAI_API_KEY' in getattr(st, 'secrets', {}))}`")
+    st.markdown(f"- st.secrets.openai.api_key present: `{bool(openai_secret_top and 'openai' in getattr(st, 'secrets', {}))}`")
     st.code(mask_key(openai_key_effective))
-    reveal_key = st.checkbox("Reveal raw OpenAI key in logs (risky!)", value=False)
+    reveal_key = st.checkbox("Reveal raw OpenAI key (risky)", value=False)
 
     st.markdown("---")
     run_button = st.button("Run retrieval scripts (hardcoded query)")
@@ -286,17 +287,18 @@ with col_output:
     stderr_area = detail_expander.empty()
     parsed_area = detail_expander.empty()
     chunks_area = detail_expander.empty()
+    traceback_area = detail_expander.empty()
 
 # small helper to timestamp logs
 logs: List[str] = []
 def add_log(msg: str):
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     logs.append(f"[{ts}] {msg}")
+    # use code block so newlines kept
     log_box.code("\n".join(logs), language="text")
 
-# ---------------- Helpers: package check, chunk utils ----------------
-def check_packages():
-    """Return a small dict marking presence of key packages"""
+# ---------------- Helpers ----------------
+def check_packages() -> Dict[str, bool]:
     pkgs = {}
     for pkg in ("numpy", "sentence_transformers", "faiss", "faiss_cpu", "faiss-cpu"):
         try:
@@ -341,12 +343,8 @@ def dedupe_and_merge(semantic: List[Dict[str, Any]], keyword: List[Dict[str, Any
         })
     return combined
 
-# ---------------- Core: run script and parse + produce merged chunks ----------------
+# ---------------- Core runner ----------------
 def run_script_and_capture(script_path: Path, query: str, force_table_filter: bool = False) -> Dict[str, Any]:
-    """
-    Run the given script via the same python executable used by Streamlit.
-    Returns a dict with keys: exists, cmd, returncode, stdout, stderr, parsed_json, merged_chunks, error
-    """
     result = {
         "script": str(script_path),
         "exists": script_path.exists(),
@@ -359,169 +357,201 @@ def run_script_and_capture(script_path: Path, query: str, force_table_filter: bo
         "error": None,
     }
 
-    add_log(f"Checking script path: {script_path}")
-    if not script_path.exists():
-        result["error"] = f"Script not found at {script_path}"
-        add_log("ERROR: " + result["error"])
-        return result
-
-    # Use same python interpreter as Streamlit
-    python_exec = sys.executable
-    cmd = [
-        python_exec,
-        str(script_path),
-        "--query", query,
-        "--top_k", str(TOP_K)
-    ]
-    result["cmd"] = " ".join(cmd)
-    add_log(f"Preparing to run: {result['cmd']}")
-    add_log(f"Working directory: {BASE_DIR}")
-    add_log(f"Using Python executable: {python_exec}")
-
-    # show quick availability of key packages
     try:
-        pkg_status = check_packages()
-        add_log("Package availability: " + ", ".join([f"{k}:{'Y' if v else 'N'}" for k,v in pkg_status.items()]))
-    except Exception as e:
-        add_log(f"Package check error: {e}")
+        add_log(f"Checking script path: {script_path}")
+        if not script_path.exists():
+            result["error"] = f"Script not found at {script_path}"
+            add_log("ERROR: " + result["error"])
+            return result
 
-    try:
+        python_exec = sys.executable
+        cmd = [python_exec, str(script_path), "--query", query, "--top_k", str(TOP_K)]
+        result["cmd"] = " ".join(cmd)
+        add_log(f"Running command: {result['cmd']}")
+        add_log(f"Working dir: {BASE_DIR}")
+        add_log(f"Python exec: {python_exec}")
+
+        # package check
+        try:
+            pkg_status = check_packages()
+            add_log("Package availability: " + ", ".join([f"{k}:{'Y' if v else 'N'}" for k,v in pkg_status.items()]))
+        except Exception as e:
+            add_log(f"Package check failed: {e}")
+
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT, cwd=str(BASE_DIR))
         result["returncode"] = proc.returncode
         result["stdout"] = proc.stdout
         result["stderr"] = proc.stderr
-        add_log(f"Process finished with exit code {proc.returncode}")
 
-        # Display raw outputs in UI (overwrite areas per script call)
+        # show raw outputs
         stdout_area.text_area(f"STDOUT for {script_path.name}", proc.stdout or "<no stdout>", height=300)
-        if proc.stderr and proc.stderr.strip():
-            stderr_area.text_area(f"STDERR for {script_path.name}", proc.stderr, height=300)
-        else:
-            stderr_area.text_area(f"STDERR for {script_path.name}", "<no stderr>", height=120)
+        stderr_area.text_area(f"STDERR for {script_path.name}", proc.stderr or "<no stderr>", height=200)
 
-        # Try to parse JSON from stdout
+        add_log(f"Process exit code: {proc.returncode}")
+
+        # parse JSON robustly: try marker, then last JSON blob
         payload = None
         try:
-            m = re.search(r"RETRIEVAL_JSON_OUTPUT:\s*(\{[\s\S]+\})", proc.stdout)
-            if m:
-                payload = json.loads(m.group(1))
-                result["parsed_json"] = payload
-                parsed_area.json(payload)
-                add_log("Parsed JSON found via RETRIEVAL_JSON_OUTPUT marker.")
-            else:
-                # fallback: find first JSON object in stdout
-                m2 = re.search(r"(\{[\s\S]+\})", proc.stdout)
-                if m2:
-                    payload = json.loads(m2.group(1))
-                    result["parsed_json"] = payload
-                    parsed_area.json(payload)
-                    add_log("Parsed JSON found via fallback (first JSON object in stdout).")
+            if proc.stdout:
+                m = re.search(r"RETRIEVAL_JSON_OUTPUT:\s*(\{[\s\S]+\})", proc.stdout)
+                if m:
+                    payload = json.loads(m.group(1))
+                    add_log("Parsed JSON via RETRIEVAL_JSON_OUTPUT marker.")
                 else:
-                    add_log("No JSON found in stdout.")
-        except Exception as e:
-            result["error"] = f"JSON parse error: {e}"
-            add_log("ERROR parsing JSON: " + str(e))
-            parsed_area.text("Failed to parse JSON from stdout. See stdout/stderr above.")
+                    # try to find the last JSON object in stdout to avoid partial logs earlier
+                    matches = list(re.finditer(r"(\{[\s\S]*?\})", proc.stdout))
+                    if matches:
+                        last = matches[-1].group(1)
+                        payload = json.loads(last)
+                        add_log("Parsed JSON via fallback (last JSON blob in stdout).")
+        except Exception as je:
+            add_log("JSON parse exception: " + str(je))
+            # include traceback in stderr area as well
+            stderr_area.text(proc.stderr or "" + "\n\nJSON parse exception:\n" + traceback.format_exc())
 
-        # If payload exists, extract semantic & keyword results and merge/dedupe
+        result["parsed_json"] = payload
+
         if payload:
-            sem_results = payload.get("semantic", {}).get("results", []) if isinstance(payload.get("semantic", {}), dict) else []
-            kw_results = payload.get("keyword", {}).get("results", []) if isinstance(payload.get("keyword", {}), dict) else []
-            add_log(f"Found semantic results: {len(sem_results)}, keyword results: {len(kw_results)}")
+            sem_results = []
+            kw_results = []
+            try:
+                sem_obj = payload.get("semantic", {})
+                if isinstance(sem_obj, dict):
+                    sem_results = sem_obj.get("results", []) or []
+                kw_obj = payload.get("keyword", {})
+                if isinstance(kw_obj, dict):
+                    kw_results = kw_obj.get("results", []) or []
+                add_log(f"Found semantic: {len(sem_results)}, keyword: {len(kw_results)}")
+            except Exception:
+                add_log("Error extracting semantic/keyword arrays.")
+                stderr_area.text("Error extracting semantic/keyword arrays:\n" + traceback.format_exc())
 
-            # apply optional table-only filter
+            # apply table-only filter if requested
             if force_table_filter:
-                sem_results = [i for i in sem_results if is_table_chunk(i)]
-                kw_results = [i for i in kw_results if is_table_chunk(i)]
-                add_log(f"Applied table-only filter -> semantic: {len(sem_results)}, keyword: {len(kw_results)}")
+                try:
+                    sem_results = [i for i in sem_results if is_table_chunk(i)]
+                    kw_results = [i for i in kw_results if is_table_chunk(i)]
+                    add_log(f"Applied table filter -> semantic: {len(sem_results)}, keyword: {len(kw_results)}")
+                except Exception:
+                    add_log("Error applying table filter.")
+                    stderr_area.text("Error applying table filter:\n" + traceback.format_exc())
 
-            merged = dedupe_and_merge(sem_results, kw_results)
-            result["merged_chunks"] = merged
-            add_log(f"Merged deduped chunk count: {len(merged)}")
+            try:
+                merged = dedupe_and_merge(sem_results, kw_results)
+                result["merged_chunks"] = merged
+                add_log(f"Merged deduped chunk count: {len(merged)}")
+            except Exception:
+                add_log("Error during dedupe_and_merge.")
+                stderr_area.text("Error during dedupe_and_merge:\n" + traceback.format_exc())
         else:
-            add_log("No payload parsed, so no merged chunks available.")
+            add_log("No JSON payload parsed from stdout; merged_chunks will be empty.")
+
     except subprocess.TimeoutExpired:
-        result["error"] = f"Timeout expired after {SUBPROCESS_TIMEOUT} seconds."
+        result["error"] = f"Timeout expired after {SUBPROCESS_TIMEOUT} s."
         add_log("ERROR: " + result["error"])
         stderr_area.text(result["error"])
     except Exception as e:
-        result["error"] = f"Exception while running script: {e}\n{traceback.format_exc()}"
-        add_log("ERROR: Exception while running script.")
-        stderr_area.text(result["error"])
+        result["error"] = f"Exception running script: {e}"
+        add_log("UNEXPECTED ERROR: " + str(e))
+        traceback_area.text(traceback.format_exc())
+        stderr_area.text(str(e) + "\n\n" + traceback.format_exc())
 
     return result
 
-# Run both scripts when button pressed
+# ---------------- Main action ----------------
 if run_button:
     logs.clear()
     add_log("=== RUN STARTED ===")
-    add_log(f"Base directory: {BASE_DIR}")
-    add_log(f"Combined retrieval script: {RETRIEVAL_COMBINED}")
-    add_log(f"Tables retrieval script: {RETRIEVAL_TABLES}")
+    add_log(f"Base dir: {BASE_DIR}")
+    add_log(f"Combined script: {RETRIEVAL_COMBINED}")
+    add_log(f"Tables script: {RETRIEVAL_TABLES}")
 
-    # Print effective OpenAI key info (from earlier)
-    openai_env = os.getenv("OPENAI_API_KEY") or ""
-    openai_secret_top = ""
+    # reveal key optionally
+    if reveal_key and openai_key_effective:
+        add_log(f"OpenAI key (REVEALED): {openai_key_effective}")
+    else:
+        add_log(f"OpenAI key present: {bool(openai_key_effective)} (masked in UI)")
+
+    # Run combined retrieval
+    add_log(">>> Running combined retrieval (text + tables)")
     try:
-        if "OPENAI_API_KEY" in st.secrets:
-            openai_secret_top = st.secrets["OPENAI_API_KEY"]
-        elif "openai" in st.secrets and isinstance(st.secrets["openai"], dict):
-            openai_secret_top = st.secrets["openai"].get("api_key", "")
+        res_combined = run_script_and_capture(RETRIEVAL_COMBINED, HARD_CODED_QUERY, force_table_filter=False)
+        add_log(f"Combined exit: {res_combined.get('returncode')}, error: {res_combined.get('error')}")
     except Exception:
-        openai_secret_top = ""
-    openai_key_effective = openai_env or openai_secret_top or ""
-    add_log("OpenAI key present: " + ("YES" if openai_key_effective else "NO"))
-    if reveal_key:
-        add_log(f"Raw OpenAI key (revealed): {openai_key_effective}")
-    else:
-        add_log(f"Masked OpenAI key: {mask_key(openai_key_effective)}")
+        add_log("Combined retrieval raised an unhandled exception.")
+        traceback_area.text(traceback.format_exc())
+        st.error("Combined retrieval failed — see logs and stderr above.")
+        raise  # re-raise so dev can see in logs
 
-    # Run combined retrieval (text + tables)
-    add_log("=== Running combined (text + tables) retrieval ===")
-    res_combined = run_script_and_capture(RETRIEVAL_COMBINED, HARD_CODED_QUERY, force_table_filter=False)
-    add_log(f"Combined retrieval finished. Exit code: {res_combined.get('returncode')}, error: {res_combined.get('error')}")
-    # Display combined merged chunks
-    merged_combined = res_combined.get("merged_chunks", []) or []
-    if merged_combined:
-        add_log(f"Displaying top {min(50, len(merged_combined))} merged chunks from combined retrieval.")
-        out_lines = []
-        for i, c in enumerate(merged_combined[:50], start=1):
-            snippet = c.get("content", "")
-            if len(snippet) > 800:
-                snippet = snippet[:800] + " ... [truncated]"
-            out_lines.append(
-                f"--- CHUNK {i} ---\nchunk_id: {c.get('chunk_id')}\npdf_name: {c.get('pdf_name')}\npage: {c.get('page')}\nscore: {c.get('score')}\ncontent:\n{snippet}\n"
-            )
-        chunks_area.code("\n".join(out_lines), language="text")
-    else:
-        add_log("No merged chunks returned by combined retrieval.")
-        chunks_area.info("No merged chunks for combined retrieval.")
+    # Display combined chunks
+    try:
+        merged_combined = res_combined.get("merged_chunks") or []
+        if merged_combined:
+            add_log(f"Displaying top {min(50, len(merged_combined))} combined chunks.")
+            lines = []
+            for i, c in enumerate(merged_combined[:50], start=1):
+                snippet = c.get("content", "")
+                if len(snippet) > 800:
+                    snippet = snippet[:800] + " ... [truncated]"
+                lines.append(
+                    f"--- CHUNK {i} ---\nchunk_id: {c.get('chunk_id')}\npdf_name: {c.get('pdf_name')}\npage: {c.get('page')}\nscore: {c.get('score')}\ncontent:\n{snippet}\n"
+                )
+            chunks_area.code("\n".join(lines), language="text")
+        else:
+            add_log("No merged chunks from combined retrieval.")
+            chunks_area.info("No merged chunks from combined retrieval.")
+    except Exception:
+        add_log("Error while rendering combined chunks.")
+        traceback_area.text(traceback.format_exc())
+        chunks_area.error("Failed to render combined chunks — see traceback.")
 
-    add_log("=== Running tables-only retrieval ===")
-    res_tables = run_script_and_capture(RETRIEVAL_TABLES, HARD_CODED_QUERY, force_table_filter=True)
-    add_log(f"Tables retrieval finished. Exit code: {res_tables.get('returncode')}, error: {res_tables.get('error')}")
-    merged_tables = res_tables.get("merged_chunks", []) or []
-    if merged_tables:
-        add_log(f"Displaying top {min(50, len(merged_tables))} merged chunks from tables-only retrieval.")
-        out_lines = []
-        for i, c in enumerate(merged_tables[:50], start=1):
-            snippet = c.get("content", "")
-            if len(snippet) > 800:
-                snippet = snippet[:800] + " ... [truncated]"
-            out_lines.append(
-                f"--- TABLE CHUNK {i} ---\nchunk_id: {c.get('chunk_id')}\npdf_name: {c.get('pdf_name')}\npage: {c.get('page')}\nscore: {c.get('score')}\ncontent:\n{snippet}\n"
-            )
-        # append to existing chunks area (if combined already printed)
-        prev = chunks_area._maybe_rendered_value  # not public, but attempt safe append fallback
-        try:
-            # simply render tables chunk list below combined
-            chunks_area.code((prev or "") + "\n\n" + "\n".join(out_lines), language="text")
-        except Exception:
-            chunks_area.code("\n".join(out_lines), language="text")
-    else:
-        add_log("No merged chunks returned by tables retrieval.")
+    # Run tables-only retrieval
+    add_log(">>> Running tables-only retrieval")
+    try:
+        res_tables = run_script_and_capture(RETRIEVAL_TABLES, HARD_CODED_QUERY, force_table_filter=True)
+        add_log(f"Tables exit: {res_tables.get('returncode')}, error: {res_tables.get('error')}")
+    except Exception:
+        add_log("Tables retrieval raised an unhandled exception.")
+        traceback_area.text(traceback.format_exc())
+        st.error("Tables retrieval failed — see logs and stderr above.")
+        raise
+
+    # Display tables chunks (append below or replace if none)
+    try:
+        merged_tables = res_tables.get("merged_chunks") or []
+        if merged_tables:
+            add_log(f"Displaying top {min(50, len(merged_tables))} table chunks.")
+            lines = []
+            for i, c in enumerate(merged_tables[:50], start=1):
+                snippet = c.get("content", "")
+                if len(snippet) > 800:
+                    snippet = snippet[:800] + " ... [truncated]"
+                lines.append(
+                    f"--- TABLE CHUNK {i} ---\nchunk_id: {c.get('chunk_id')}\npdf_name: {c.get('pdf_name')}\npage: {c.get('page')}\nscore: {c.get('score')}\ncontent:\n{snippet}\n"
+                )
+            # append to existing chunks display safely
+            try:
+                prev_text = ""
+                try:
+                    # try reading current value of chunks_area by rendering then reusing logs content
+                    # fallback: just render both lists combined
+                    chunks_area.code("\n\n".join([chunks_area._rendered_value if hasattr(chunks_area, "_rendered_value") else "", "\n".join(lines)]), language="text")
+                except Exception:
+                    # safe fallback to simply render lines
+                    chunks_area.code("\n".join(lines), language="text")
+            except Exception:
+                # last fallback: show in a new area
+                st.code("\n".join(lines), language="text")
+        else:
+            add_log("No merged chunks from tables retrieval.")
+            # do not overwrite combined display; show info
+            st.info("No merged chunks from tables retrieval.")
+    except Exception:
+        add_log("Error while rendering table chunks.")
+        traceback_area.text(traceback.format_exc())
+        st.error("Failed to render table chunks — see traceback.")
 
     add_log("=== RUN COMPLETE ===")
-    st.success("Run complete — scroll through the Step-by-step log and the Detailed output panels for full stdout/stderr/JSON/chunks.")
+    st.success("Run complete — check logs, STDOUT/STERR, parsed JSON and chunks above.")
 else:
     st.info("Click 'Run retrieval scripts (hardcoded query)' to execute both retrieval scripts and show all outputs and merged retrieved chunks.")
