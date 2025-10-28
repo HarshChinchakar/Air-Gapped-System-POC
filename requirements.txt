@@ -12,6 +12,7 @@ faiss-cpu
 rank-bm25
 tiktoken
 rapidfuzz
+rank_bm25
 
 # OCR, PDF & Image Processing
 pytesseract
